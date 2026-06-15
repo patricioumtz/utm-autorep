@@ -381,6 +381,28 @@
   .history-copy:hover { color: var(--blue); }
   .history-copy svg { width: 14px; height: 14px; display: block; }
   .empty-history { font-size: 13px; color: var(--gray-400); text-align: center; padding: 1rem; }
+  .history-header {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  .history-header .card-title { margin-bottom: 0; }
+  .history-status {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--gray-400);
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .btn-export {
+    background: var(--gray-100);
+    color: var(--gray-800);
+    border: 1px solid var(--gray-200);
+    font-size: 12px;
+    padding: 6px 12px;
+  }
+  .btn-export:hover { background: var(--gray-200); }
 
   /* REGLAS */
   .rules-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; }
@@ -640,17 +662,24 @@
 
       <!-- HISTORIAL -->
       <div class="card">
-        <div class="card-title">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
-          Historial de sesión
+        <div class="history-header">
+          <div class="card-title" style="margin-bottom:0;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+            Historial
+          </div>
+          <span class="history-status" id="history-status">Cargando...</span>
         </div>
         <div id="history-list">
           <div class="empty-history">Los UTMs generados aparecen aquí</div>
         </div>
-        <div id="history-actions" class="hidden" style="margin-top:10px;">
-          <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" onclick="clearHistory()">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px;"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
-            Limpiar historial
+        <div id="history-actions" class="hidden" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-export" onclick="exportCSV()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px;"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Exportar CSV
+          </button>
+          <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" onclick="loadHistory()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px;"><path d="M3 12a9 9 0 101.5-5H3m0 0v5m0-5h5"/></svg>
+            Actualizar
           </button>
         </div>
       </div>
@@ -694,8 +723,13 @@ const CANAL_NOTES = {
   "google|video|paid":            "Para anuncios de YouTube pagados, el source es 'google' (no 'youtube') porque se gestiona desde Google Ads."
 };
 
-const history = [];
+// ── CONFIG — actualiza esta URL cuando despliegues el Worker ──────────────────
+const API = 'https://utm-api.patricioumtz.workers.dev';
 
+// ── Estado ────────────────────────────────────────────────────────────────────
+let dbHistory = []; // historial cargado desde D1
+
+// ── Sanitize ──────────────────────────────────────────────────────────────────
 function sanitize(str) {
   return str.trim().toLowerCase()
     .replace(/\s+/g, '-')
@@ -705,6 +739,83 @@ function sanitize(str) {
     .replace(/[^a-z0-9\-]/g,'');
 }
 
+// ── API calls ─────────────────────────────────────────────────────────────────
+async function saveUtm(payload) {
+  try {
+    await fetch(`${API}/utm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch(e) {
+    console.warn('No se pudo guardar en DB:', e);
+  }
+}
+
+async function loadHistory() {
+  const status = document.getElementById('history-status');
+  status.textContent = 'Cargando...';
+  try {
+    const res = await fetch(`${API}/utms`);
+    dbHistory = await res.json();
+    renderHistory();
+  } catch(e) {
+    status.textContent = 'Sin conexión';
+    console.warn('No se pudo cargar historial:', e);
+  }
+}
+
+async function exportCSV() {
+  try {
+    const res = await fetch(`${API}/export`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `utms-autorep-${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch(e) {
+    alert('Error al exportar. Verifica la conexión.');
+  }
+}
+
+// ── Render historial ──────────────────────────────────────────────────────────
+function renderHistory() {
+  const list = document.getElementById('history-list');
+  const actions = document.getElementById('history-actions');
+  const status = document.getElementById('history-status');
+
+  if (!dbHistory || dbHistory.length === 0) {
+    list.innerHTML = '<div class="empty-history">Los UTMs generados aparecen aquí</div>';
+    actions.classList.add('hidden');
+    status.textContent = '0 registros';
+    return;
+  }
+
+  status.textContent = `${dbHistory.length} registros`;
+  actions.classList.remove('hidden');
+
+  list.innerHTML = dbHistory.slice(0, 10).map(row => {
+    const fullUrl = row.full_url || '';
+    const short = fullUrl.replace('https://www.autorep.mx','autorep.mx').replace('https://autorep.mx','autorep.mx');
+    const fecha = row.created_at ? row.created_at.slice(0,10) : '';
+    return `<div class="history-item" onclick="copyFromHistory('${fullUrl.replace(/'/g,"\\'")}', this)">
+      <div class="history-item-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;color:var(--blue)"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
+      </div>
+      <div style="flex:1;min-width:0;">
+        <div class="history-url">${short}</div>
+        <div class="history-meta">${row.source} · ${row.medium} · ${row.campaign}${fecha ? ' · ' + fecha : ''}</div>
+      </div>
+      <button class="history-copy" title="Copiar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+      </button>
+    </div>`;
+  }).join('');
+}
+
+// ── UI functions ──────────────────────────────────────────────────────────────
 function onCanalChange() {
   const v = document.getElementById('canal-select').value;
   const badge = document.getElementById('canal-badge');
@@ -826,54 +937,28 @@ function copyUrl() {
   const url = document.getElementById('result-url').textContent;
   if (!url) return;
 
+  const canalVal = document.getElementById('canal-select').value;
+  const [source, medium] = canalVal.split('|');
+  const campaign = getCampaignValue();
+  const utmContent = document.getElementById('content-select').value;
+  const baseUrl = document.getElementById('url-input').value.trim();
+
   navigator.clipboard.writeText(url).then(() => {
     const btn = document.getElementById('copy-btn');
     btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" style="width:15px;height:15px;"><path d="M20 6L9 17l-5-5"/></svg>¡Copiada!`;
     btn.classList.remove('btn-primary');
     btn.classList.add('btn-success');
-    addToHistory(url);
+
+    // Guardar en D1 y recargar historial
+    saveUtm({ url: baseUrl, source, medium, campaign, content: utmContent || null, full_url: url })
+      .then(() => loadHistory());
+
     setTimeout(() => {
       btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px;"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>Copiar URL`;
       btn.classList.add('btn-primary');
       btn.classList.remove('btn-success');
     }, 2000);
   });
-}
-
-function addToHistory(url) {
-  if (history.includes(url)) return;
-  history.unshift(url);
-  renderHistory();
-}
-
-function renderHistory() {
-  const list = document.getElementById('history-list');
-  const actions = document.getElementById('history-actions');
-  if (history.length === 0) {
-    list.innerHTML = '<div class="empty-history">Los UTMs generados aparecen aquí</div>';
-    actions.classList.add('hidden');
-    return;
-  }
-  actions.classList.remove('hidden');
-  list.innerHTML = history.slice(0, 8).map((url, i) => {
-    const short = url.replace('https://www.autorep.mx','autorep.mx').replace('https://autorep.mx','autorep.mx');
-    const params = url.split('?')[1] || '';
-    const src = (params.match(/utm_source=([^&]+)/) || [])[1] || '';
-    const med = (params.match(/utm_medium=([^&]+)/) || [])[1] || '';
-    const camp = (params.match(/utm_campaign=([^&]+)/) || [])[1] || '';
-    return `<div class="history-item" onclick="copyFromHistory('${url.replace(/'/g,"\\'")}', this)">
-      <div class="history-item-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;color:var(--blue)"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
-      </div>
-      <div style="flex:1;min-width:0;">
-        <div class="history-url">${short}</div>
-        <div class="history-meta">${src} · ${med} · ${camp}</div>
-      </div>
-      <button class="history-copy" title="Copiar">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-      </button>
-    </div>`;
-  }).join('');
 }
 
 function copyFromHistory(url, el) {
@@ -886,11 +971,6 @@ function copyFromHistory(url, el) {
       }, 1500);
     }
   });
-}
-
-function clearHistory() {
-  history.length = 0;
-  renderHistory();
 }
 
 function resetForm() {
@@ -909,6 +989,9 @@ function resetForm() {
   document.getElementById('result-empty').classList.remove('hidden');
   document.getElementById('result-content').classList.add('hidden');
 }
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', loadHistory);
 </script>
 </body>
 </html>
